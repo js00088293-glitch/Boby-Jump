@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Boby Jump - 視覺強化版</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Zpix&family=Press+Start+2P&display=swap');
+        
+        body {
+            margin: 0;
+            background-color: #1a1a1a;
+            overflow: hidden;
+            font-family: 'Zpix', 'Press Start 2P', "Microsoft JhengHei", sans-serif;
+            touch-action: none;
+        }
+
+        #game-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            max-width: 450px;
+            margin: 0 auto;
+            background: #222;
+            border-left: 4px solid #444;
+            border-right: 4px solid #444;
+            overflow: hidden;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(to bottom, #1e3799, #0c2461);
+        }
+
+        /* UI 排版：置中且強調單位 */
+        #ui-layer {
+            position: absolute;
+            top: 40px; 
+            left: 0;
+            right: 0;
+            pointer-events: none;
+            display: flex;
+            justify-content: center;
+            z-index: 10;
+        }
+
+        .score-container {
+            text-align: center;
+            color: white;
+            text-shadow: 4px 4px 0px #000;
+        }
+
+        .score-label {
+            font-size: 18px;
+            letter-spacing: 2px;
+            margin-bottom: 5px;
+            color: rgba(255, 255, 255, 0.9);
+        }
+
+        .score-wrapper {
+            display: flex;
+            align-items: baseline;
+            justify-content: center;
+        }
+
+        .score-value {
+            font-family: 'Press Start 2P', cursive;
+            font-size: 48px;
+            color: #f1c40f;
+        }
+
+        .score-unit {
+            font-family: 'Press Start 2P', cursive;
+            font-size: 20px; /* 單位略小於數字，維持視覺層級 */
+            color: #f1c40f;
+            margin-left: 8px;
+        }
+
+        #overlay {
+            position: absolute;
+            inset: 0;
+            background: rgba(0,0,0,0.85);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            z-index: 100;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .btn {
+            margin-top: 40px;
+            padding: 20px 50px;
+            background: #f0932b;
+            border: none;
+            color: white;
+            font-size: 24px;
+            cursor: pointer;
+            border-bottom: 6px solid #d35400;
+            letter-spacing: 3px;
+            transition: all 0.1s;
+        }
+
+        .btn:active {
+            border-bottom: 2px solid #d35400;
+            transform: translateY(4px);
+        }
+
+        #controls-hint {
+            position: absolute;
+            bottom: 40px;
+            width: 100%;
+            text-align: center;
+            color: rgba(255,255,255,0.7);
+            font-size: 16px;
+            letter-spacing: 1px;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <!-- 加入 M 單位的 UI 層 -->
+    <div id="ui-layer">
+        <div class="score-container">
+            <div class="score-label">目前高度</div>
+            <div class="score-wrapper">
+                <div id="score-text" class="score-value">0</div>
+                <div class="score-unit">M</div>
+            </div>
+        </div>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <div id="overlay">
+        <h1 style="font-size: 48px; margin-bottom: 15px; color: #fff;">BOBY JUMP</h1>
+        <p style="font-size: 20px; color: #f1c40f; margin-bottom: 30px;">向上跳躍，挑戰極限！</p>
+        <p id="final-score" style="font-size: 22px; color: #fff; line-height: 1.8;"></p>
+        <button id="start-btn" class="btn">開始挑戰</button>
+    </div>
+
+    <div id="controls-hint">← → 移動 | 踩踏平台自動跳躍</div>
+</div>
+
+<script>
+/**
+ * Boby Jump - Score Unit Enhancement
+ */
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const scoreText = document.getElementById('score-text');
+const overlay = document.getElementById('overlay');
+const startBtn = document.getElementById('start-btn');
+const finalScoreText = document.getElementById('final-score');
+
+// 遊戲配置
+let gameState = 'START';
+let score = 0;
+let cameraY = 0;
+const gravity = 0.45;
+const jumpStrength = -14; 
+const friction = 0.85;
+
+// Boby 屬性
+const player = {
+    x: 0,
+    y: 0,
+    width: 64, 
+    height: 64, 
+    vx: 0,
+    vy: 0,
+    speed: 1.5,
+    maxVx: 7,
+    img: new Image(),
+    facing: 'right'
+};
+player.img.src = 'https://duk.tw/Txy4Fj.png';
+
+// 平台管理
+let platforms = [];
+const platformWidth = 100;
+const platformHeight = 16;
+const minPlatformDist = 90; 
+const maxPlatformDist = 150;
+
+const keys = {};
+window.addEventListener('keydown', e => keys[e.code] = true);
+window.addEventListener('keyup', e => keys[e.code] = false);
+
+let touchDirection = 0;
+window.addEventListener('touchstart', e => {
+    const x = e.touches[0].clientX;
+    touchDirection = (x < window.innerWidth / 2) ? -1 : 1;
+});
+window.addEventListener('touchend', () => touchDirection = 0);
+
+function initGame() {
+    score = 0;
+    cameraY = 0;
+    platforms = [];
+    
+    player.x = canvas.width / 2 - player.width / 2;
+    player.y = canvas.height - 150;
+    player.vx = 0;
+    player.vy = jumpStrength;
+
+    let lastY = canvas.height - 60;
+    platforms.push({ x: canvas.width / 2 - platformWidth / 2, y: lastY, type: 'NORMAL' });
+
+    for (let i = 0; i < 15; i++) {
+        lastY -= (Math.random() * (maxPlatformDist - minPlatformDist) + minPlatformDist);
+        spawnPlatform(lastY);
+    }
+    
+    gameState = 'PLAYING';
+    overlay.style.display = 'none';
+}
+
+function spawnPlatform(y) {
+    let x;
+    if (Math.random() > 0.5) x = Math.random() * (canvas.width * 0.4);
+    else x = canvas.width * 0.6 + Math.random() * (canvas.width * 0.4 - platformWidth);
+    
+    x = Math.max(0, Math.min(x, canvas.width - platformWidth));
+    const rand = Math.random();
+    let type = 'NORMAL';
+    const springChance = 0.12;
+    const fragileChance = Math.min(0.35, 0.05 + (score / 1500));
+    
+    if (rand < springChance) type = 'SPRING';
+    else if (rand < springChance + fragileChance) type = 'FRAGILE';
+    
+    platforms.push({ x, y, width: platformWidth, height: platformHeight, type, fragileTouched: false });
+}
+
+function update() {
+    if (gameState !== 'PLAYING') return;
+
+    if (keys['ArrowLeft'] || touchDirection === -1) {
+        player.vx -= player.speed;
+        player.facing = 'left';
+    } else if (keys['ArrowRight'] || touchDirection === 1) {
+        player.vx += player.speed;
+        player.facing = 'right';
+    } else {
+        player.vx *= friction;
+    }
+
+    if (Math.abs(player.vx) > player.maxVx) player.vx = Math.sign(player.vx) * player.maxVx;
+    player.x += player.vx;
+
+    if (player.x + player.width < 0) player.x = canvas.width;
+    if (player.x > canvas.width) player.x = -player.width;
+
+    player.vy += gravity;
+    player.y += player.vy;
+
+    if (player.y < cameraY + canvas.height / 2) {
+        cameraY = player.y - canvas.height / 2;
+    }
+
+    const currentScore = Math.floor(Math.abs(player.y - (canvas.height - 150)) / 10);
+    if (currentScore > score) {
+        score = currentScore;
+    }
+
+    platforms = platforms.filter(p => p.y < cameraY + canvas.height + 100);
+    while (platforms[platforms.length - 1].y > cameraY - 150) {
+        let lastY = platforms[platforms.length - 1].y;
+        spawnPlatform(lastY - (Math.random() * (maxPlatformDist - minPlatformDist) + minPlatformDist));
+    }
+
+    if (player.vy > 0) {
+        platforms.forEach(p => {
+            if (player.x + player.width * 0.7 > p.x && 
+                player.x + player.width * 0.3 < p.x + p.width && 
+                player.y + player.height > p.y && 
+                player.y + player.height < p.y + p.height + player.vy) {
+                
+                if (p.type === 'SPRING') player.vy = jumpStrength * 1.8;
+                else if (p.type === 'FRAGILE') {
+                    if (!p.fragileTouched) {
+                        player.vy = jumpStrength;
+                        p.fragileTouched = true;
+                        p.colorOverride = '#7f8c8d';
+                        setTimeout(() => { p.y = -9999; }, 150);
+                    }
+                } else player.vy = jumpStrength;
+            }
+        });
+    }
+
+    if (player.y > cameraY + canvas.height) gameOver();
+
+    scoreText.innerText = score;
+}
+
+function gameOver() {
+    gameState = 'GAMEOVER';
+    overlay.style.display = 'flex';
+    finalScoreText.innerHTML = `本次挑戰高度<br><span style="font-size: 42px; color: #f1c40f;">${score} M</span>`;
+    startBtn.innerText = '再次挑戰';
+}
+
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.save();
+    ctx.translate(0, -cameraY);
+
+    platforms.forEach(p => {
+        let color = '#2ecc71';
+        if (p.type === 'SPRING') color = '#f1c40f';
+        if (p.type === 'FRAGILE') color = p.colorOverride || '#e67e22';
+        
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        const r = 6; 
+        ctx.moveTo(p.x + r, p.y);
+        ctx.arcTo(p.x + p.width, p.y, p.x + p.width, p.y + p.height, r);
+        ctx.arcTo(p.x + p.width, p.y + p.height, p.x, p.y + p.height, r);
+        ctx.arcTo(p.x, p.y + p.height, p.x, p.y, r);
+        ctx.arcTo(p.x, p.y, p.x + p.width, p.y, r);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,0.3)';
+        ctx.fillRect(p.x + 5, p.y + 3, p.width - 10, 3);
+    });
+
+    ctx.save();
+    if (player.facing === 'left') {
+        ctx.scale(-1, 1);
+        ctx.drawImage(player.img, -player.x - player.width, player.y, player.width, player.height);
+    } else {
+        ctx.drawImage(player.img, player.x, player.y, player.width, player.height);
+    }
+    ctx.restore();
+
+    ctx.restore();
+
+    requestAnimationFrame(() => {
+        update();
+        draw();
+    });
+}
+
+function resize() {
+    const container = document.getElementById('game-container');
+    canvas.width = container.clientWidth;
+    canvas.height = container.clientHeight;
+}
+
+window.addEventListener('resize', resize);
+window.onload = () => {
+    resize();
+    startBtn.onclick = initGame;
+    draw();
+};
+</script>
+</body>
+</html>
